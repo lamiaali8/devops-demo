@@ -1,0 +1,14 @@
+services:
+  backend:
+    image: devops-backend:1.0
+    container_name: backend
+    ports:
+      - "8080:8080"
+
+  frontend:
+    image: devops-frontend:1.0
+    container_name: devops-frontend
+    ports:
+      - "8081:80"
+    depends_on:
+      - backend
