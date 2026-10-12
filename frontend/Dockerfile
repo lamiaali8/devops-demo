@@ -1,8 +1,17 @@
-FROM nginx:alpine
+FROM node:22-alpine
 
-COPY index.html /usr/share/nginx/html/
-COPY style.css /usr/share/nginx/html/
-COPY app.js /usr/share/nginx/html/
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+WORKDIR /app
 
-EXPOSE 80
+COPY package*.json ./
+
+RUN npm ci --omit=dev
+
+COPY server.js ./
+COPY views ./views
+COPY public ./public
+
+ENV PORT=3000
+
+EXPOSE 3000
+
+CMD ["npm", "start"]

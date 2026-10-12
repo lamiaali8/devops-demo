@@ -24,10 +24,14 @@ func main() {
 	http.HandleFunc("/api/hello", helloHandler)
 	http.HandleFunc("/health", healthHandler)
 
-	fmt.Println("Go backend listening on port 8080")
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
+	fmt.Printf("Go backend listening on port %s\n", port)
+
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		panic(err)
 	}
 }

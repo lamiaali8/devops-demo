@@ -1,14 +1,21 @@
 services:
   backend:
-    image: devops-backend:1.0
+    build: ./backend
+    image: devops-backend:2.0
     container_name: backend
+    environment:
+      PORT: "8080"
     ports:
       - "8080:8080"
 
   frontend:
-    image: devops-frontend:1.0
+    build: ./frontend
+    image: devops-frontend:ssr-1.0
     container_name: devops-frontend
+    environment:
+      PORT: "3000"
+      BACKEND_URL: "http://backend:8080"
     ports:
-      - "8081:80"
+      - "8081:3000"
     depends_on:
       - backend
