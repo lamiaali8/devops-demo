@@ -1,0 +1,85 @@
+name: Backend - Docker Build Run Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-docker.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-docker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build-run-test:
+    name: Build Image, Run Container and Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Verify Docker is available
+        run: docker --version
+
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            -t devops-backend-ci:${{ github.sha }} \
+            ./backend
+
+      - name: Start backend container
+        run: |
+          docker run -d \
+            --name backend-ci-test \
+            -e PORT=8080 \
+            -p 127.0.0.1:18080:8080 \
+            devops-backend-ci:${{ github.sha }}
+
+      - name: Test backend endpoints
+        run: |
+          set -eu
+
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/health; then
+              echo
+              break
+            fi
+
+            if [ "$i" -eq 30 ]; then
+              echo "Backend container did not become ready."
+              docker logs backend-ci-test
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          health_response="$(curl --fail --silent http://127.0.0.1:18080/health)"
+          test "$health_response" = "OK"
+          echo "Health endpoint passed."
+
+          hello_response="$(curl --fail --silent http://127.0.0.1:18080/api/hello)"
+          echo "$hello_response"
+
+          echo "$hello_response" | grep -q "Hello from Go Backend!"
+          echo "$hello_response" | grep -q "Hostname:"
+          echo "Hello endpoint passed."
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs backend-ci-test || true
+
+      - name: Clean up test container
+        if: always()
+        run: |
+          docker rm -f backend-ci-test 2>/dev/null || true
