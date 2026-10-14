@@ -1,0 +1,99 @@
+name: Backend - Native Build Run Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-native.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-run-test:
+    name: Build, Run and Test Go Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.x"
+
+      - name: Check Go formatting
+        working-directory: backend
+        run: |
+          if [ -n "$(gofmt -l main.go)" ]; then
+            echo "Go code needs formatting:"
+            gofmt -l main.go
+            exit 1
+          fi
+
+      - name: Download dependencies
+        working-directory: backend
+        run: go mod download
+
+      - name: Run Go tests
+        working-directory: backend
+        run: go test ./...
+
+      - name: Build backend
+        working-directory: backend
+        run: go build -o backend-app .
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          PORT=8080 ./backend-app > /tmp/backend.log 2>&1 &
+          echo $! > /tmp/backend.pid
+
+      - name: Test backend endpoints
+        working-directory: backend
+        run: |
+          set -eu
+
+          for i in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:8080/health; then
+              echo
+              break
+            fi
+
+            if [ "$i" -eq 20 ]; then
+              echo "Backend did not become ready."
+              cat /tmp/backend.log
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          health_response="$(curl --fail --silent http://127.0.0.1:8080/health)"
+          test "$health_response" = "OK"
+          echo "Health endpoint passed."
+
+          hello_response="$(curl --fail --silent http://127.0.0.1:8080/api/hello)"
+          echo "$hello_response"
+
+          echo "$hello_response" | grep -q "Hello from Go Backend!"
+          echo "$hello_response" | grep -q "Hostname:"
+          echo "Hello endpoint passed."
+
+      - name: Stop backend
+        if: always()
+        run: |
+          if [ -f /tmp/backend.pid ]; then
+            kill "$(cat /tmp/backend.pid)" 2>/dev/null || true
+          fi
