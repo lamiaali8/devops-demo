@@ -1,0 +1,122 @@
+name: Frontend SSR - Native Build Run Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/frontend-ssr-native.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/frontend-ssr-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-run-test:
+    name: Install, Run and Test SSR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Go for backend dependency
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.x"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build backend dependency
+        working-directory: backend
+        run: go build -o backend-app .
+
+      - name: Start backend dependency
+        working-directory: backend
+        run: |
+          PORT=8080 ./backend-app > /tmp/ssr-backend.log 2>&1 &
+          echo $! > /tmp/ssr-backend.pid
+
+      - name: Start SSR frontend
+        working-directory: frontend
+        env:
+          PORT: "3000"
+          BACKEND_URL: "http://127.0.0.1:8080"
+        run: |
+          npm start > /tmp/ssr-frontend.log 2>&1 &
+          echo $! > /tmp/ssr-frontend.pid
+
+      - name: Test SSR page, assets and API proxy
+        run: |
+          set -eu
+
+          ready=false
+
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:3000/ > /tmp/ssr-page.html; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != "true" ]; then
+            echo "SSR frontend did not become ready."
+            cat /tmp/ssr-frontend.log
+            cat /tmp/ssr-backend.log
+            exit 1
+          fi
+
+          grep -q "Frontend Hostname:" /tmp/ssr-page.html
+          echo "SSR HTML rendering passed."
+
+          curl --fail --silent http://127.0.0.1:3000/app.js > /dev/null
+          curl --fail --silent http://127.0.0.1:3000/style.css > /dev/null
+          echo "Frontend static assets passed."
+
+          health_response="$(curl --fail --silent http://127.0.0.1:8080/health)"
+          test "$health_response" = "OK"
+
+          api_response="$(curl --fail --silent http://127.0.0.1:3000/api/hello)"
+          echo "$api_response"
+
+          echo "$api_response" | grep -q "Hello from Go Backend!"
+          echo "$api_response" | grep -q "Hostname:"
+          echo "Frontend-to-backend API proxy passed."
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "===== FRONTEND LOG ====="
+          cat /tmp/ssr-frontend.log 2>/dev/null || true
+          echo "===== BACKEND LOG ====="
+          cat /tmp/ssr-backend.log 2>/dev/null || true
+
+      - name: Stop test processes
+        if: always()
+        run: |
+          if [ -f /tmp/ssr-frontend.pid ]; then
+            kill "$(cat /tmp/ssr-frontend.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/ssr-backend.pid ]; then
+            kill "$(cat /tmp/ssr-backend.pid)" 2>/dev/null || true
+          fi
