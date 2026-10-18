@@ -1,0 +1,122 @@
+name: Frontend SSR - Docker Build Run Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/frontend-ssr-docker.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "frontend/**"
+      - "backend/**"
+      - ".github/workflows/frontend-ssr-docker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build-run-test:
+    name: Build Images, Run Containers and Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Verify Docker
+        run: docker --version
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t devops-backend-ci:${{ github.sha }} \
+            ./backend
+
+      - name: Build SSR frontend image
+        run: |
+          docker build \
+            -t devops-ssr-frontend-ci:${{ github.sha }} \
+            ./frontend
+
+      - name: Create test network
+        run: docker network create ssr-ci-network
+
+      - name: Start backend container
+        run: |
+          docker run -d \
+            --name ssr-backend-ci \
+            --network ssr-ci-network \
+            --network-alias backend \
+            -e PORT=8080 \
+            -p 127.0.0.1:18080:8080 \
+            devops-backend-ci:${{ github.sha }}
+
+      - name: Start SSR frontend container
+        run: |
+          docker run -d \
+            --name ssr-frontend-ci \
+            --network ssr-ci-network \
+            -e PORT=3000 \
+            -e BACKEND_URL=http://backend:8080 \
+            -p 127.0.0.1:18081:3000 \
+            devops-ssr-frontend-ci:${{ github.sha }}
+
+      - name: Test containers and endpoints
+        run: |
+          set -eu
+
+          ready=false
+
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18081/ > /tmp/ssr-page.html; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != "true" ]; then
+            echo "SSR frontend did not become ready."
+            docker logs ssr-frontend-ci
+            docker logs ssr-backend-ci
+            exit 1
+          fi
+
+          grep -q "Frontend Hostname:" /tmp/ssr-page.html
+          echo "SSR rendering passed."
+
+          curl --fail --silent http://127.0.0.1:18081/app.js > /dev/null
+          curl --fail --silent http://127.0.0.1:18081/style.css > /dev/null
+          echo "Static assets passed."
+
+          health_response="$(curl --fail --silent http://127.0.0.1:18080/health)"
+          test "$health_response" = "OK"
+          echo "Backend health check passed."
+
+          api_response="$(curl --fail --silent http://127.0.0.1:18081/api/hello)"
+          echo "$api_response"
+
+          echo "$api_response" | grep -q "Hello from Go Backend!"
+          echo "$api_response" | grep -q "Hostname:"
+          echo "Frontend-to-backend communication passed."
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "===== SSR FRONTEND LOGS ====="
+          docker logs ssr-frontend-ci 2>&1 || true
+          echo "===== BACKEND LOGS ====="
+          docker logs ssr-backend-ci 2>&1 || true
+
+      - name: Clean up containers and network
+        if: always()
+        run: |
+          docker rm -f ssr-frontend-ci ssr-backend-ci 2>/dev/null || true
+          docker network rm ssr-ci-network 2>/dev/null || true
