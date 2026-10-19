@@ -1,0 +1,54 @@
+:root {
+  font-family: system-ui, sans-serif;
+  color: #172033;
+  background: #f3f6fb;
+  font-synthesis: none;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.container {
+  width: min(680px, calc(100% - 40px));
+  padding: 32px;
+  box-sizing: border-box;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgb(23 32 51 / 10%);
+}
+
+.tag {
+  color: #2563eb;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+button {
+  padding: 12px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: #2563eb;
+  color: white;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+pre {
+  padding: 16px;
+  min-height: 44px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: #eef2ff;
+  border-radius: 8px;
+}

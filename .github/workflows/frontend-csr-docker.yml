@@ -1,0 +1,127 @@
+name: Frontend CSR - Docker Build Run Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "frontend-csr/**"
+      - "backend/**"
+      - ".github/workflows/frontend-csr-docker.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "frontend-csr/**"
+      - "backend/**"
+      - ".github/workflows/frontend-csr-docker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  docker-build-run-test:
+    name: Build Images, Run Containers and Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Verify Docker
+        run: docker --version
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t devops-backend-csr-ci:${{ github.sha }} \
+            ./backend
+
+      - name: Build CSR frontend image
+        run: |
+          docker build \
+            -t devops-csr-frontend-ci:${{ github.sha }} \
+            ./frontend-csr
+
+      - name: Create test network
+        run: docker network create csr-ci-network
+
+      - name: Start backend container
+        run: |
+          docker run -d \
+            --name csr-backend-ci \
+            --network csr-ci-network \
+            --network-alias backend \
+            -e PORT=8080 \
+            -p 127.0.0.1:18082:8080 \
+            devops-backend-csr-ci:${{ github.sha }}
+
+      - name: Start CSR frontend container
+        run: |
+          docker run -d \
+            --name csr-frontend-ci \
+            --network csr-ci-network \
+            -p 127.0.0.1:18083:80 \
+            devops-csr-frontend-ci:${{ github.sha }}
+
+      - name: Test containers and endpoints
+        run: |
+          set -eu
+
+          ready=false
+
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18083/ > /tmp/csr-page.html; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != "true" ]; then
+            echo "CSR frontend container did not become ready."
+            docker logs csr-frontend-ci
+            docker logs csr-backend-ci
+            exit 1
+          fi
+
+          grep -q 'id="root"' /tmp/csr-page.html
+          echo "CSR HTML shell passed."
+
+          js_asset="$(grep -oE '/assets/[^"]+\.js' /tmp/csr-page.html | head -n 1)"
+          test -n "$js_asset"
+          curl --fail --silent "http://127.0.0.1:18083${js_asset}" > /dev/null
+          echo "Production JavaScript asset passed."
+
+          css_asset="$(grep -oE '/assets/[^"]+\.css' /tmp/csr-page.html | head -n 1 || true)"
+          if [ -n "$css_asset" ]; then
+            curl --fail --silent "http://127.0.0.1:18083${css_asset}" > /dev/null
+            echo "Production CSS asset passed."
+          fi
+
+          health_response="$(curl --fail --silent http://127.0.0.1:18082/health)"
+          test "$health_response" = "OK"
+          echo "Backend health check passed."
+
+          api_response="$(curl --fail --silent http://127.0.0.1:18083/api/hello)"
+          echo "$api_response"
+
+          echo "$api_response" | grep -q "Hello from Go Backend!"
+          echo "$api_response" | grep -q "Hostname:"
+          echo "CSR frontend-to-backend communication passed."
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "===== CSR FRONTEND LOGS ====="
+          docker logs csr-frontend-ci 2>&1 || true
+          echo "===== BACKEND LOGS ====="
+          docker logs csr-backend-ci 2>&1 || true
+
+      - name: Clean up containers and network
+        if: always()
+        run: |
+          docker rm -f csr-frontend-ci csr-backend-ci 2>/dev/null || true
+          docker network rm csr-ci-network 2>/dev/null || true

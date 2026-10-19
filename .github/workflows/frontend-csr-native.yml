@@ -1,0 +1,135 @@
+name: Frontend CSR - Native Build Run Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "frontend-csr/**"
+      - "backend/**"
+      - ".github/workflows/frontend-csr-native.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "frontend-csr/**"
+      - "backend/**"
+      - ".github/workflows/frontend-csr-native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-run-test:
+    name: Build, Run and Test React CSR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend-csr/package-lock.json
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.x"
+
+      - name: Install frontend dependencies
+        working-directory: frontend-csr
+        run: npm ci
+
+      - name: Build React production assets
+        working-directory: frontend-csr
+        run: npm run build
+
+      - name: Verify production build output
+        working-directory: frontend-csr
+        run: |
+          test -s dist/index.html
+          find dist/assets -type f | grep -q '\.js$'
+          find dist/assets -type f | grep -q '\.css$'
+          echo "Production HTML, JavaScript and CSS assets exist."
+
+      - name: Build backend dependency
+        working-directory: backend
+        run: go build -o backend-app .
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          PORT=8080 ./backend-app > /tmp/csr-backend.log 2>&1 &
+          echo $! > /tmp/csr-backend.pid
+
+      - name: Start Vite development server
+        working-directory: frontend-csr
+        env:
+          BACKEND_URL: "http://127.0.0.1:8080"
+        run: |
+          npm run dev -- --host 127.0.0.1 \
+            > /tmp/csr-frontend.log 2>&1 &
+          echo $! > /tmp/csr-frontend.pid
+
+      - name: Test CSR page, assets and API proxy
+        run: |
+          set -eu
+
+          ready=false
+
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5173/ > /tmp/csr-page.html; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != "true" ]; then
+            echo "Vite server did not become ready."
+            cat /tmp/csr-frontend.log
+            cat /tmp/csr-backend.log
+            exit 1
+          fi
+
+          grep -q '/src/main.jsx' /tmp/csr-page.html
+          echo "CSR HTML entry page passed."
+
+          curl --fail --silent http://127.0.0.1:5173/src/main.jsx \
+            | grep -q 'createRoot'
+          echo "React entry module passed."
+
+          curl --fail --silent http://127.0.0.1:5173/src/App.jsx \
+            | grep -q 'Call Go Backend'
+          echo "React app module passed."
+
+          api_response="$(curl --fail --silent http://127.0.0.1:5173/api/hello)"
+          echo "$api_response"
+
+          echo "$api_response" | grep -q "Hello from Go Backend!"
+          echo "$api_response" | grep -q "Hostname:"
+          echo "CSR-to-backend API proxy passed."
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "===== CSR FRONTEND LOG ====="
+          cat /tmp/csr-frontend.log 2>/dev/null || true
+          echo "===== BACKEND LOG ====="
+          cat /tmp/csr-backend.log 2>/dev/null || true
+
+      - name: Stop test processes
+        if: always()
+        run: |
+          if [ -f /tmp/csr-frontend.pid ]; then
+            kill "$(cat /tmp/csr-frontend.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/csr-backend.pid ]; then
+            kill "$(cat /tmp/csr-backend.pid)" 2>/dev/null || true
+          fi

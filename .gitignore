@@ -23,3 +23,7 @@ frontend/build/
 # IDE
 .vscode/
 .idea/
+
+# React CSR generated files
+/frontend-csr/node_modules/
+/frontend-csr/dist/
